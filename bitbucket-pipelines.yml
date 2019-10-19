@@ -1,0 +1,178 @@
+image: python:3.5.6 
+definitions:
+  services:
+    docker:
+      memory: 7168
+
+
+options:
+  size: 2x  # all steps in the repo get 8GB memory
+
+pipelines:
+  pull-requests:
+    '**': #this runs as default for any branch not elsewhere defined
+      - step: 
+          services:
+            - docker
+          name: Build and Test
+          script:
+            # Upgrade Docker Compose to the latest version test
+            - if [ "${BITBUCKET_PR_DESTINATION_BRANCH}" != "developer" ]; then printf 'not a target developer branch we want to check'; exit; fi
+            - python --version
+            - export DOCKER_COMPOSE_VERSION=1.13.0
+            - curl -L https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-`uname -s`-`uname -m` > docker-compose
+            - chmod +x docker-compose
+            - mv docker-compose /usr/local/bin
+            - docker --version
+            - docker-compose --version
+
+            - export OPENEDX_RELEASE=hawthorn.master
+            - mkdir tmp
+            - export DEVSTACK=lms
+            - export DEVSTACK_WORKSPACE=/opt/atlassian/pipelines/agent/build/tmp
+            - export BITBUCKET_CLONE_DIR=/opt/atlassian/pipelines/agent/build/tmp
+            - export SHALLOW_CLONE=1
+            - export COMPOSE_INTERACTIVE_NO_CLI=1
+            - cd tmp
+            - git clone --depth=1 --branch=open-release/hawthorn.master https://github.com/sanjaydatasciencedojo/devstack.git devstack
+            - cd devstack
+            - make requirements
+            - make dev.clone
+            - make pull
+            - make dev.provision
+            - make  dev.up
+            - sleep 60
+            - docker exec -t edx.devstack.lms bash -c 'cd /edx/app/edxapp && mkdir themes && chmod -R 777 themes'
+            - docker cp /opt/atlassian/pipelines/agent/build/metronic edx.devstack.lms:/edx/app/edxapp/themes
+            - docker cp /opt/atlassian/pipelines/agent/build/metronic-pre-prod edx.devstack.lms:/edx/app/edxapp/themes
+       # comment this out if you are making change in METRONIC-PRE_PROD
+            - wget https://raw.githubusercontent.com/Testorganization914/edx-theme/master/metronic/lms.env.json 
+       
+       # comment out this if you are NOT making change in METRONIC_PRE_PROD
+            #- wget https://raw.githubusercontent.com/Testorganization914/edx-theme/master/metronicpreprod/lms.env.json 
+            
+            - docker cp lms.env.json edx.devstack.lms:/edx/app/edxapp/lms.env.json
+            - docker exec -t edx.devstack.lms bash -c 'cd /edx/app/edxapp && chmod 777 lms.env.json'
+            - docker-compose restart lms
+            - make lms-static
+            - docker-compose restart lms
+            - make e2e-tests
+  branches:
+     developer:
+     - step:
+         name: Deploy to Developer
+         deployment: Staging
+         script: 
+         - echo "Deployment Started"
+     - step:
+         name: Deploy to zenq
+         deployment: zenq
+         script:
+         - echo "Successful deployment to Developer"
+         - whoami
+         - ssh root@134.209.0.158 /bin/bash <<'ENDSSH'
+         - hostname
+         - dir
+         - sudo -H -u edxapp bash
+         - cd /edx/var/edx-themes
+         - git pull origin developer
+
+         # If there is NO STATIC CHNAGE IN TE THEME, comment out the line below
+         - cd ~ && source /edx/app/edxapp/edxapp_env && cd /edx/app/edxapp/edx-platform && paver update_assets  lms --settings=aws --debug && paver update_assets cms --settings=aws --debug
+
+         - exit
+         - sudo /edx/bin/supervisorctl restart all
+         - sudo /edx/bin/supervisorctl status all
+         - ENDSSH
+
+
+     master:
+       - step: 
+           services:
+             - docker
+           name: Build and Test
+           script:
+                   # Upgrade Docker Compose to the latest version tests
+             - python --version
+             - export DOCKER_COMPOSE_VERSION=1.13.0
+             - curl -L https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-`uname -s`-`uname -m` > docker-compose
+             - chmod +x docker-compose
+             - mv docker-compose /usr/local/bin
+             - docker --version
+             - docker-compose --version
+
+             - export OPENEDX_RELEASE=hawthorn.master
+             - mkdir tmp
+             - export DEVSTACK=lms
+             - export DEVSTACK_WORKSPACE=/opt/atlassian/pipelines/agent/build/tmp
+             - export BITBUCKET_CLONE_DIR=/opt/atlassian/pipelines/agent/build/tmp
+             - export SHALLOW_CLONE=1
+             - export COMPOSE_INTERACTIVE_NO_CLI=1
+             - cd tmp
+             - git clone --depth=1 --branch=open-release/hawthorn.master https://github.com/sanjaydatasciencedojo/devstack.git devstack
+             - cd devstack
+             - make requirements
+             - make dev.clone
+             - make pull
+             - make dev.provision
+             - make  dev.up
+             - sleep 60
+             - docker exec -t edx.devstack.lms bash -c 'cd /edx/app/edxapp && mkdir themes && chmod -R 777 themes'
+             - docker cp /opt/atlassian/pipelines/agent/build/metronic edx.devstack.lms:/edx/app/edxapp/themes
+             # comment this out if you are making change in METRONIC-PRE_PROD
+             - wget https://raw.githubusercontent.com/Testorganization914/edx-theme/master/metronic/lms.env.json 
+
+             # comment out this if you are NOT making change in METRONIC_PRE_PROD
+             #- wget https://raw.githubusercontent.com/Testorganization914/edx-theme/master/metronicpreprod/lms.env.json 
+             - docker cp lms.env.json edx.devstack.lms:/edx/app/edxapp/lms.env.json
+             - docker exec -t edx.devstack.lms bash -c 'cd /edx/app/edxapp && chmod 777 lms.env.json'
+             - docker-compose restart lms
+             - make lms-static
+             - docker-compose restart lms
+             - make e2e-tests
+       - step:
+           name: Deploy to Production
+           deployment: production
+           script: 
+           - echo "Deployment Started"
+       - step:
+           name: Deploy to Production
+           deployment: production1
+           trigger: manual
+           script:
+            - echo "Successful deployment to Production1"
+            - whoami
+            - ssh root@178.128.182.47 /bin/bash <<'ENDSSH'
+            - hostname
+            - dir
+            - sudo -H -u edxapp bash
+            - cd /edx/var/edx-themes
+            - git pull origin master
+
+         # If there is NO STATIC CHNAGE IN TE THEME, comment out the line below
+            - cd ~ && source /edx/app/edxapp/edxapp_env && cd /edx/app/edxapp/edx-platform && paver update_assets lms --settings=aws --debug && paver update_assets cms --settings=aws --debug
+
+            - exit
+            - sudo /edx/bin/supervisorctl restart all
+            - sudo /edx/bin/supervisorctl status all
+            - ENDSSH
+
+       - step:
+           name: Deploy to Server 2
+           deployment: production2
+           trigger: manual
+           script:
+            - echo "Successful deployment to Production"
+            - whoami
+            - ssh root@142.93.90.107 /bin/bash <<'ENDSSH'
+            - hostname
+            - dir
+            - sudo -H -u edxapp bash
+            - cd /edx/var/edx-themes
+            - git pull origin master
+            # If there is NO STATIC CHANGE IN THE THEME, comment out the line below
+            - cd ~ && source /edx/app/edxapp/edxapp_env && cd /edx/app/edxapp/edx-platform && paver update_assets lms --settings=aws --debug && paver update_assets cms --settings=aws --debug
+            - exit
+            - sudo /edx/bin/supervisorctl restart all
+            - sudo /edx/bin/supervisorctl status all
+            - ENDSSH
